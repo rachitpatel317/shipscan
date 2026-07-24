@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>ShipScan — Verify Order</title>
+<style>
+  :root {
+    --ink: #10231c;
+    --paper: #f3f6f1;
+    --accent: #1f8a5b;
+    --accent-dark: #14603f;
+    --ok: #1f8a5b;
+    --warn: #b23b2e;
+    --amber: #b7791f;
+    --line: #d4ddd3;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--paper); color: var(--ink); min-height: 100vh;
+  }
+  header {
+    background: var(--accent-dark); color: #fff; padding: 14px 18px;
+    display: flex; align-items: center; justify-content: space-between;
+    position: sticky; top: 0; z-index: 10;
+  }
+  header .title { font-weight: 700; font-size: 18px; letter-spacing: .3px; }
+  header .who { font-size: 13px; opacity: .85; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+
+  .scanbox {
+    background: #fff; border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 16px;
+  }
+  #reader { width: 100%; border-radius: 10px; overflow: hidden; }
+  .controls { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+  input[type=text] {
+    flex: 1; min-width: 160px; padding: 14px; font-size: 17px;
+    border: 1px solid var(--line); border-radius: 10px;
+  }
+  button {
+    padding: 14px 18px; font-size: 16px; font-weight: 600; border: none;
+    border-radius: 10px; background: var(--accent); color: #fff; cursor: pointer;
+  }
+  button.secondary { background: #e7ede6; color: var(--ink); }
+  button:active { transform: translateY(1px); }
+
+  .result { border-radius: var(--radius); overflow: hidden; margin-bottom: 16px; display: none; }
+  .result.show { display: block; }
+  .result .banner {
+    padding: 14px 18px; font-weight: 700; font-size: 18px; color: #fff;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .result.ok .banner { background: var(--ok); }
+  .result.mismatch .banner { background: var(--warn); }
+  .result.notfound .banner { background: var(--amber); }
+  .result .body { background: #fff; border: 1px solid var(--line); border-top: none;
+    padding: 18px; }
+
+  .toprow { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .channel { font-size: 13px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .5px; color: var(--accent-dark); background: #e7f2ec;
+    padding: 4px 10px; border-radius: 999px; }
+
+  .items { margin: 14px 0; border-top: 1px solid var(--line); }
+  .item { display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 0; border-bottom: 1px solid var(--line); gap: 12px; }
+  .item .name { font-size: 16px; }
+  .item .sku { font-size: 12px; color: #6a776c; }
+  .item .qty { font-size: 20px; font-weight: 700; min-width: 54px; text-align: right; }
+  .item .qty span { font-size: 12px; font-weight: 500; color: #6a776c; }
+
+  .addr { margin-top: 6px; padding-top: 14px; border-top: 1px dashed var(--line);
+    white-space: pre-line; font-size: 15px; line-height: 1.5; }
+  .ordno { font-size: 14px; color: #4a564c; margin-top: 8px; }
+  .note { font-size: 14px; margin-top: 10px; padding: 10px 12px; border-radius: 8px;
+    background: #f6f2e8; color: #6b5a2e; }
+  .result.mismatch .note { background: #fbe9e6; color: #8a2b20; }
+
+  .hint { font-size: 13px; color: #6a776c; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="title">📦 ShipScan</div>
+  <div class="who" id="who">Set name</div>
+</header>
+
+<main>
+  <div class="scanbox">
+    <div id="reader"></div>
+    <div class="controls">
+      <input type="text" id="tracking" placeholder="Scan or type tracking number"
+             autocomplete="off" inputmode="text" />
+      <button id="checkBtn">Check</button>
+    </div>
+    <div class="controls">
+      <button class="secondary" id="camBtn">Start camera</button>
+      <button class="secondary" id="nameBtn">Change name</button>
+    </div>
+    <div class="hint">Scan the shipping label barcode, or type the tracking number and tap Check.</div>
+  </div>
+
+  <div class="result" id="result">
+    <div class="banner" id="banner"></div>
+    <div class="body" id="body"></div>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
+  let userName = localStorage.getItem('scanUser') || '';
+  let scanner = null;
+  let busy = false;
+
+  function askName(force) {
+    if (userName && !force) return;
+    const n = prompt('Enter your name or station ID:', userName || '');
+    if (n && n.trim()) {
+      userName = n.trim();
+      localStorage.setItem('scanUser', userName);
+    }
+    $('who').textContent = userName || 'Set name';
+  }
+  $('who').textContent = userName || 'Set name';
+  $('nameBtn').onclick = () => askName(true);
+
+  async function check(tracking) {
+    if (busy) return;
+    tracking = (tracking || '').trim();
+    if (!tracking) return;
+    if (!userName) { askName(); if (!userName) return; }
+    busy = true;
+    beep(660, 90);
+    try {
+      const res = await fetch('/api/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracking, user: userName }),
+      });
+      const data = await res.json();
+      render(data);
+    } catch (e) {
+      renderError('Network error. Check your connection and try again.');
+    } finally {
+      busy = false;
+      $('tracking').value = '';
+    }
+  }
+
+  function esc(s) {
+    return String(s || '').replace(/[&<>]/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+  }
+
+  function render(d) {
+    const r = $('result');
+    r.className = 'result show';
+    const banner = $('banner');
+    const body = $('body');
+
+    if (d.status === 'not_found') {
+      r.classList.add('notfound');
+      banner.textContent = '⚠️ Not found';
+      body.innerHTML = `<div class="note">${esc(d.message)}</div>
+        <div class="ordno">Tracking: ${esc(d.tracking)}</div>`;
+      beep(300, 300);
+      return;
+    }
+
+    if (d.status === 'mismatch') { r.classList.add('mismatch'); beep(200, 600); }
+    else { r.classList.add('ok'); beep(880, 120); }
+
+    let bannerText;
+    if (d.status === 'mismatch') bannerText = '❌ Mismatch — do not ship';
+    else if (d.first_scan) bannerText = '✅ Verified';
+    else bannerText = '✅ Already scanned — match';
+
+    banner.textContent = bannerText;
+
+    const itemsHtml = (d.items || []).map((it) => `
+      <div class="item">
+        <div>
+          <div class="name">${esc(it.name)}</div>
+          ${it.sku ? `<div class="sku">SKU: ${esc(it.sku)}</div>` : ''}
+        </div>
+        <div class="qty">${it.qty}<span> qty</span></div>
+      </div>`).join('');
+
+    let note = '';
+    if (d.message) note = `<div class="note">${esc(d.message)}</div>`;
+    let scanInfo = '';
+    if (!d.first_scan && d.first_scanned_at) {
+      scanInfo = `<div class="ordno">First scanned by ${esc(d.first_scanned_by)} at
+        ${new Date(d.first_scanned_at).toLocaleString()}</div>`;
+    }
+
+    body.innerHTML = `
+      <div class="toprow">
+        <span class="channel">${esc(d.channel || 'Unknown')}</span>
+      </div>
+      <div class="items">${itemsHtml || '<div class="item"><div class="name">No items listed</div></div>'}</div>
+      <div class="ordno"><strong>Order #:</strong> ${esc(d.order_number)}</div>
+      <div class="addr">${esc(d.ship_to_addr)}</div>
+      ${scanInfo}
+      ${note}
+    `;
+    r.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function renderError(msg) {
+    const r = $('result');
+    r.className = 'result show notfound';
+    $('banner').textContent = '⚠️ Error';
+    $('body').innerHTML = `<div class="note">${esc(msg)}</div>`;
+  }
+
+  // simple audio feedback
+  let audioCtx;
+  function beep(freq, ms) {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.frequency.value = freq; o.type = 'square';
+      o.connect(g); g.connect(audioCtx.destination);
+      g.gain.setValueAtTime(0.15, audioCtx.currentTime);
+      o.start();
+      o.stop(audioCtx.currentTime + ms / 1000);
+    } catch (_) {}
+  }
+
+  $('checkBtn').onclick = () => check($('tracking').value);
+  $('tracking').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') check($('tracking').value);
+  });
+
+  // Camera scanning
+  $('camBtn').onclick = async () => {
+    if (scanner) {
+      await scanner.stop().catch(() => {});
+      scanner = null;
+      $('camBtn').textContent = 'Start camera';
+      return;
+    }
+    scanner = new Html5Qrcode('reader');
+    try {
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 260, height: 140 } },
+        (text) => {
+          check(text);
+        },
+        () => {}
+      );
+      $('camBtn').textContent = 'Stop camera';
+    } catch (e) {
+      renderError('Could not open camera. Use manual entry instead. ' + e);
+      scanner = null;
+    }
+  };
+
+  if (!userName) setTimeout(() => askName(), 400);
+</script>
+</body>
+</html>

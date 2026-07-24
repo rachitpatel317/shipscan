@@ -1,0 +1,19 @@
+{
+  "name": "shipscan",
+  "version": "1.0.0",
+  "description": "ShipStation shipped-order scan verification system",
+  "main": "backend/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node backend/server.js",
+    "sync": "node backend/sync.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0",
+    "node-cron": "^3.0.3",
+    "pg": "^8.13.1"
+  }
+}
