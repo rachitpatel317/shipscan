@@ -200,10 +200,98 @@ app.get('/api/admin/orders', checkAdmin, async (req, res) => {
   }
 });
 
-app.get('/api/admin/scans/:tracking', checkAdmin, async (req, res) => {
+// Parse a signature string ("sku|name|qty||sku|name|qty") into product objects.
+function parseSignature(sig) {
+  if (!sig) return [];
+  return sig
+    .split('||')
+    .filter(Boolean)
+    .map((part) => {
+      const [sku, name, qty] = part.split('|');
+      return { sku: sku || '', name: name || '', qty: parseInt(qty || '0', 10) };
+    });
+}
+
+// Compare first vs current product lists and return a per-product diff.
+function diffProducts(firstList, nowList) {
+  const key = (p) => `${p.sku}|${p.name}`;
+  const map = new Map();
+  for (const p of firstList) map.set(key(p), { name: p.name, sku: p.sku, first: p.qty, now: 0 });
+  for (const p of nowList) {
+    const k = key(p);
+    if (map.has(k)) map.get(k).now = p.qty;
+    else map.set(k, { name: p.name, sku: p.sku, first: 0, now: p.qty });
+  }
+  const rows = [];
+  for (const v of map.values()) {
+    let change;
+    if (v.first === 0 && v.now > 0) change = 'added';
+    else if (v.now === 0 && v.first > 0) change = 'removed';
+    else if (v.first !== v.now) change = 'qty_changed';
+    else change = 'same';
+    rows.push({ ...v, change });
+  }
+  return rows;
+}
+
+// Full detail for one tracking: order info, scan timeline (who/when), and the
+// before/after product comparison for any mismatch.
+app.get('/api/admin/detail/:tracking', checkAdmin, async (req, res) => {
   try {
-    res.json({ scans: await getScans(req.params.tracking) });
+    const tracking = req.params.tracking;
+    const order = await getOrder(tracking);
+    const scans = await getScans(tracking);
+
+    // First scan holds the original signature; find the latest mismatch (if any).
+    let firstSig = null;
+    if (scans[0]) {
+      try {
+        firstSig = JSON.parse(scans[0].detail || '{}').signature;
+      } catch (_) {}
+    }
+    const mismatchScan = [...scans].reverse().find((s) => s.status === 'mismatch');
+
+    let diff = null;
+    let firstProducts = parseSignature(firstSig);
+    let nowProducts = null;
+
+    if (mismatchScan) {
+      let d = {};
+      try {
+        d = JSON.parse(mismatchScan.detail || '{}');
+      } catch (_) {}
+      firstProducts = parseSignature(d.first || firstSig);
+      nowProducts = parseSignature(d.now);
+      diff = diffProducts(firstProducts, nowProducts);
+    }
+
+    // Build a clean timeline for display.
+    const timeline = scans.map((s) => ({
+      scanned_by: s.scanned_by,
+      status: s.status,
+      is_first_scan: !!s.is_first_scan,
+      scanned_at: s.scanned_at,
+    }));
+
+    res.json({
+      tracking,
+      order: order
+        ? {
+            order_number: order.order_number,
+            channel: order.channel,
+            ship_to_name: order.ship_to_name,
+            ship_to_addr: order.ship_to_addr,
+            current_items: JSON.parse(order.items_json || '[]'),
+          }
+        : null,
+      has_mismatch: !!mismatchScan,
+      first_products: firstProducts,
+      now_products: nowProducts,
+      diff,
+      timeline,
+    });
   } catch (e) {
+    console.error('detail error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
