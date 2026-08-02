@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ShipScan — Admin Dashboard</title>
+<style>
+  :root {
+    --ink: #10231c; --paper: #f3f6f1; --accent: #1f8a5b; --accent-dark: #14603f;
+    --line: #d4ddd3; --ok: #1f8a5b; --warn: #b23b2e; --amber: #b7791f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--paper); color: var(--ink); }
+  header { background: var(--accent-dark); color: #fff; padding: 14px 20px;
+    display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+  header .title { font-weight: 700; font-size: 18px; }
+  header .meta { font-size: 13px; opacity: .9; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+  .login { max-width: 360px; margin: 80px auto; background: #fff; border: 1px solid var(--line);
+    border-radius: 14px; padding: 24px; }
+  .login input { width: 100%; padding: 12px; font-size: 16px; border: 1px solid var(--line);
+    border-radius: 8px; margin: 12px 0; }
+  button { padding: 10px 16px; font-size: 15px; font-weight: 600; border: none;
+    border-radius: 8px; background: var(--accent); color: #fff; cursor: pointer; }
+  button.secondary { background: #e7ede6; color: var(--ink); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px; margin-bottom: 20px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card .n { font-size: 30px; font-weight: 800; }
+  .card .l { font-size: 13px; color: #55635a; text-transform: uppercase; letter-spacing: .5px; }
+  .card.pending .n { color: var(--amber); }
+  .card.checked .n { color: var(--ok); }
+  .card.mismatch .n { color: var(--warn); }
+
+  .toolbar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  .toolbar input, .toolbar select { padding: 9px 12px; font-size: 14px;
+    border: 1px solid var(--line); border-radius: 8px; }
+  .toolbar input[type=text] { flex: 1; min-width: 180px; }
+
+  table { width: 100%; border-collapse: collapse; background: #fff;
+    border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  th { background: #eef3ec; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: #4a564c; }
+  tr:last-child td { border-bottom: none; }
+  .badge { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+  .badge.pending { background: #f6eecf; color: #7a5c14; }
+  .badge.checked { background: #d9f0e3; color: #14603f; }
+  .badge.mismatch { background: #f7d9d4; color: #8a2b20; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: #f0f5ee; }
+
+  .overlay { display: none; position: fixed; inset: 0; background: rgba(16,35,28,.5);
+    align-items: flex-start; justify-content: center; z-index: 100; padding: 40px 16px; overflow-y: auto; }
+  .modal { background: #fff; border-radius: 14px; max-width: 640px; width: 100%;
+    box-shadow: 0 20px 60px rgba(0,0,0,.3); }
+  .modal-head { display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .modal-head .t { font-weight: 700; font-family: ui-monospace, monospace; font-size: 15px; }
+  .modal-head button { background: #e7ede6; color: var(--ink); padding: 6px 12px; }
+  .modal-body { padding: 16px 20px; }
+  .d-section { margin-bottom: 18px; }
+  .d-subhead { font-size: 13px; text-transform: uppercase; letter-spacing: .5px;
+    color: #55635a; font-weight: 700; margin-bottom: 8px; }
+  .d-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 14px; }
+  .d-label { color: #55635a; }
+  .d-mismatch-banner { background: #f7d9d4; color: #8a2b20; font-weight: 700;
+    padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; font-size: 14px; }
+  .d-table { width: 100%; border-collapse: collapse; }
+  .d-table th { text-align: left; font-size: 11px; text-transform: uppercase;
+    color: #55635a; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .d-table td { padding: 8px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .d-table tr.diff-row td { background: #fdf3f1; }
+  .chg { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; }
+  .chg.added { background: #d9f0e3; color: #14603f; }
+  .chg.removed { background: #f7d9d4; color: #8a2b20; }
+  .chg.changed { background: #f6eecf; color: #7a5c14; }
+  .chg.same { background: #eef1ec; color: #6a776c; }
+  .chan { font-size: 12px; background: #e7f2ec; color: #14603f; padding: 2px 8px; border-radius: 999px; }
+  .muted { color: #7a877d; font-size: 13px; }
+  .track { font-family: ui-monospace, monospace; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="login" id="login">
+    <div style="font-weight:700;font-size:18px;">ShipScan Admin</div>
+    <input type="password" id="pw" placeholder="Admin password" />
+    <button onclick="login()">Sign in</button>
+    <div id="loginErr" style="color:var(--warn);font-size:13px;margin-top:8px;"></div>
+  </div>
+
+  <div id="dash" style="display:none;">
+    <header>
+      <div class="title">📊 ShipScan Dashboard</div>
+      <div class="meta">
+        <span id="lastSync">—</span>
+        <button class="secondary" onclick="syncNow()" id="syncBtn" style="margin-left:12px;">Sync now</button>
+        <button class="secondary" onclick="load()">Refresh</button>
+      </div>
+    </header>
+    <main>
+      <div class="cards">
+        <div class="card"><div class="n" id="cTotal">0</div><div class="l">Total shipped</div></div>
+        <div class="card pending"><div class="n" id="cPending">0</div><div class="l">Pending</div></div>
+        <div class="card checked"><div class="n" id="cChecked">0</div><div class="l">Checked</div></div>
+        <div class="card mismatch"><div class="n" id="cMismatch">0</div><div class="l">Mismatch</div></div>
+      </div>
+
+      <div class="toolbar">
+        <input type="text" id="search" placeholder="Search tracking / order / name" oninput="draw()" />
+        <select id="fStatus" onchange="draw()">
+          <option value="">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="checked">Checked</option>
+          <option value="mismatch">Mismatch</option>
+        </select>
+        <select id="fChannel" onchange="draw()"><option value="">All channels</option></select>
+      </div>
+
+      <table>
+        <thead><tr>
+          <th>Status</th><th>Channel</th><th>Order #</th><th>Tracking</th>
+          <th>Ship to</th><th>Qty</th><th>Scanned by</th><th>When</th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </main>
+  </div>
+
+  <div class="overlay" id="detailOverlay" onclick="if(event.target===this)closeDetail()">
+    <div class="modal">
+      <div class="modal-head">
+        <span class="t" id="detailTitle"></span>
+        <button onclick="closeDetail()">Close</button>
+      </div>
+      <div class="modal-body" id="detailBody"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  let PW = '';
+  let DATA = { orders: [] };
+
+  async function login() {
+    PW = document.getElementById('pw').value;
+    const ok = await load(true);
+    if (ok) {
+      document.getElementById('login').style.display = 'none';
+      document.getElementById('dash').style.display = 'block';
+    } else {
+      document.getElementById('loginErr').textContent = 'Wrong password.';
+    }
+  }
+
+  async function load(silent) {
+    try {
+      const res = await fetch('/api/admin/orders', { headers: { 'x-admin-password': PW } });
+      if (res.status === 401) return false;
+      DATA = await res.json();
+      document.getElementById('cTotal').textContent = DATA.total;
+      document.getElementById('cPending').textContent = DATA.pending;
+      document.getElementById('cChecked').textContent = DATA.checked;
+      document.getElementById('cMismatch').textContent = DATA.mismatch;
+      document.getElementById('lastSync').textContent =
+        'Last sync: ' + (DATA.last_sync ? new Date(DATA.last_sync).toLocaleString() : 'never');
+      const chans = [...new Set(DATA.orders.map(o => o.channel).filter(Boolean))].sort();
+      const sel = document.getElementById('fChannel');
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">All channels</option>' +
+        chans.map(c => `<option${c===cur?' selected':''}>${esc(c)}</option>`).join('');
+      draw();
+      return true;
+    } catch (e) { return false; }
+  }
+
+  function esc(s){return String(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+  function draw() {
+    const q = document.getElementById('search').value.toLowerCase();
+    const fs = document.getElementById('fStatus').value;
+    const fc = document.getElementById('fChannel').value;
+    const rows = DATA.orders.filter(o => {
+      if (fs && o.check_status !== fs) return false;
+      if (fc && o.channel !== fc) return false;
+      if (q) {
+        const hay = (o.tracking_number + ' ' + o.order_number + ' ' + o.ship_to_name).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    document.getElementById('rows').innerHTML = rows.map(o => `
+      <tr class="clickable" onclick="openDetail('${encodeURIComponent(o.tracking_number)}')">
+        <td><span class="badge ${o.check_status}">${o.check_status}</span></td>
+        <td><span class="chan">${esc(o.channel)}</span></td>
+        <td>${esc(o.order_number)}</td>
+        <td class="track">${esc(o.tracking_number)}</td>
+        <td>${esc(o.ship_to_name)}</td>
+        <td>${o.item_count}</td>
+        <td>${esc(o.last_by) || '<span class="muted">—</span>'}</td>
+        <td class="muted">${o.last_at ? new Date(o.last_at).toLocaleString() : '—'}</td>
+      </tr>`).join('') ||
+      '<tr><td colspan="8" class="muted" style="text-align:center;padding:30px;">No matching orders.</td></tr>';
+  }
+
+  async function openDetail(trackingEnc) {
+    const tracking = decodeURIComponent(trackingEnc);
+    const overlay = document.getElementById('detailOverlay');
+    const body = document.getElementById('detailBody');
+    document.getElementById('detailTitle').textContent = tracking;
+    body.innerHTML = '<div class="muted" style="padding:20px;">Loading…</div>';
+    overlay.style.display = 'flex';
+    try {
+      const res = await fetch('/api/admin/detail/' + encodeURIComponent(tracking), {
+        headers: { 'x-admin-password': PW },
+      });
+      const d = await res.json();
+      body.innerHTML = renderDetail(d);
+    } catch (e) {
+      body.innerHTML = '<div class="muted" style="padding:20px;">Could not load details.</div>';
+    }
+  }
+
+  function closeDetail() {
+    document.getElementById('detailOverlay').style.display = 'none';
+  }
+
+  function renderDetail(d) {
+    const o = d.order || {};
+    let html = '';
+
+    // Header: order info
+    html += `<div class="d-section">
+      <div class="d-row"><span class="d-label">Order #</span><span>${esc(o.order_number) || '—'}</span></div>
+      <div class="d-row"><span class="d-label">Channel</span><span class="chan">${esc(o.channel) || '—'}</span></div>
+      <div class="d-row"><span class="d-label">Ship to</span><span>${esc(o.ship_to_name) || '—'}</span></div>
+    </div>`;
+
+    // Mismatch comparison
+    if (d.has_mismatch && d.diff) {
+      html += `<div class="d-mismatch-banner">⚠️ Mismatch detected — products differ between scans</div>`;
+      html += `<div class="d-section"><div class="d-subhead">Product comparison</div>
+        <table class="d-table">
+          <thead><tr><th>Product</th><th>First scan</th><th>Re-scan</th><th></th></tr></thead>
+          <tbody>`;
+      for (const row of d.diff) {
+        const changeLabel = {
+          added: '<span class="chg added">Added</span>',
+          removed: '<span class="chg removed">Removed</span>',
+          qty_changed: '<span class="chg changed">Qty changed</span>',
+          same: '<span class="chg same">Same</span>',
+        }[row.change];
+        html += `<tr class="${row.change !== 'same' ? 'diff-row' : ''}">
+          <td>${esc(row.name)}${row.sku ? ` <span class="muted">(${esc(row.sku)})</span>` : ''}</td>
+          <td>${row.first}</td>
+          <td>${row.now}</td>
+          <td>${changeLabel}</td>
+        </tr>`;
+      }
+      html += `</tbody></table></div>`;
+    } else if (d.first_products && d.first_products.length) {
+      // No mismatch — just show what was verified
+      html += `<div class="d-section"><div class="d-subhead">Products (verified)</div>
+        <table class="d-table"><thead><tr><th>Product</th><th>Qty</th></tr></thead><tbody>`;
+      for (const p of d.first_products) {
+        html += `<tr><td>${esc(p.name)}${p.sku ? ` <span class="muted">(${esc(p.sku)})</span>` : ''}</td><td>${p.qty}</td></tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+
+    // Scan timeline: who / when
+    html += `<div class="d-section"><div class="d-subhead">Scan history</div>`;
+    if (d.timeline && d.timeline.length) {
+      html += `<table class="d-table"><thead><tr><th>By</th><th>When</th><th>Result</th></tr></thead><tbody>`;
+      for (const t of d.timeline) {
+        const badge = `<span class="badge ${t.status === 'mismatch' ? 'mismatch' : t.status === 'ok' ? 'checked' : 'pending'}">${t.status}</span>`;
+        html += `<tr>
+          <td>${esc(t.scanned_by)}${t.is_first_scan ? ' <span class="muted">(first)</span>' : ''}</td>
+          <td class="muted">${t.scanned_at ? new Date(t.scanned_at).toLocaleString() : '—'}</td>
+          <td>${badge}</td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+    } else {
+      html += `<div class="muted">Not scanned yet.</div>`;
+    }
+    html += `</div>`;
+
+    return html;
+  }
+
+  async function syncNow() {
+    const btn = document.getElementById('syncBtn');
+    btn.textContent = 'Syncing…'; btn.disabled = true;
+    try {
+      const res = await fetch('/api/admin/sync', { method: 'POST', headers: { 'x-admin-password': PW } });
+      const d = await res.json();
+      if (d.ok) await load();
+    } finally { btn.textContent = 'Sync now'; btn.disabled = false; }
+  }
+
+  document.getElementById('pw').addEventListener('keydown', e => { if (e.key==='Enter') login(); });
+</script>
+</body>
+</html>
