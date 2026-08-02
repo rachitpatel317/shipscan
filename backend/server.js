@@ -158,7 +158,7 @@ app.get('/api/admin/orders', checkAdmin, async (req, res) => {
              (SELECT scanned_at FROM scans s WHERE s.tracking_number = o.tracking_number ORDER BY s.scanned_at DESC LIMIT 1) AS last_at
       FROM orders o
       ORDER BY o.ship_date DESC, o.updated_at DESC
-      LIMIT 2000
+      LIMIT 10000
     `);
 
     const orders = r.rows.map((row) => {
