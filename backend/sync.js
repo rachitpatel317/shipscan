@@ -1,13 +1,26 @@
-// Pulls SHIPPED orders from ShipStation V1 API and upserts them into Postgres.
-// Runs on an interval so the user-facing scan endpoint is fast and never hits
-// the ShipStation rate limit directly.
+// Pulls SHIPPED orders from ShipStation V1 API into Postgres.
+//
+// INCREMENTAL: instead of re-pulling a fixed number of days every run (which
+// wastes API calls and hits the rate limit), it remembers the timestamp of the
+// last successful sync (a "watermark") and only asks ShipStation for shipments
+// CREATED since then. So each run grabs just the new shipments, not yesterday's
+// again. The very first run (no watermark yet) pulls a small starting backlog.
 const { loadEnv } = require('./env');
 loadEnv();
 const { pool } = require('./db');
 
 const API_KEY = process.env.SHIPSTATION_API_KEY;
 const API_SECRET = process.env.SHIPSTATION_API_SECRET;
-const LOOKBACK_DAYS = parseInt(process.env.SYNC_LOOKBACK_DAYS || '14', 10);
+
+// Used ONLY for the very first sync when there is no watermark yet.
+const FIRST_RUN_BACKLOG_DAYS = parseInt(
+  process.env.FIRST_RUN_BACKLOG_DAYS || '2',
+  10
+);
+// A small safety overlap so nothing slips through the cracks between runs
+// (e.g. a shipment recorded a few seconds before the watermark). Re-pulling a
+// tiny overlap is cheap and just harmlessly updates existing rows.
+const OVERLAP_MINUTES = parseInt(process.env.SYNC_OVERLAP_MINUTES || '10', 10);
 
 const BASE = 'https://ssapi.shipstation.com';
 
@@ -45,10 +58,29 @@ async function ssFetch(url) {
   }
 }
 
-function isoDaysAgo(days) {
+// ShipStation expects "YYYY-MM-DD HH:MM:SS" (its account timezone). We store the
+// watermark in UTC and format consistently; the small overlap covers any skew.
+function fmt(d) {
+  return d.toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function daysAgo(days) {
   const d = new Date();
   d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 19).replace('T', ' ');
+  return d;
+}
+
+async function getWatermark() {
+  const r = await pool.query("SELECT value FROM meta WHERE key = 'sync_watermark'");
+  return r.rows[0]?.value || null;
+}
+
+async function setWatermark(iso) {
+  await pool.query(
+    `INSERT INTO meta(key, value) VALUES('sync_watermark', $1)
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [iso]
+  );
 }
 
 function mapOrder(o) {
@@ -119,18 +151,36 @@ async function syncOnce() {
   }
 
   const start = Date.now();
-  const shipDateStart = isoDaysAgo(LOOKBACK_DAYS);
-  console.log(`Sync started. Shipments since ${shipDateStart}...`);
+  // This run will only pull shipments RECORDED after `since`.
+  const runStartedAt = new Date();
 
+  const watermark = await getWatermark();
+  let since;
+  if (watermark) {
+    // Incremental: from last successful sync, minus a small overlap.
+    const wm = new Date(watermark);
+    wm.setMinutes(wm.getMinutes() - OVERLAP_MINUTES);
+    since = wm;
+    console.log(`Incremental sync. New shipments since ${fmt(since)} (watermark ${watermark}).`);
+  } else {
+    // First ever run: pull a small starting backlog.
+    since = daysAgo(FIRST_RUN_BACKLOG_DAYS);
+    console.log(`First sync. Pulling last ${FIRST_RUN_BACKLOG_DAYS} day(s): since ${fmt(since)}.`);
+  }
+
+  const createDateStart = fmt(since);
   const orderCache = new Map();
   let page = 1;
   let pages = 1;
   let count = 0;
 
   do {
+    // createDateStart = when ShipStation RECORDED the shipment. This is the key
+    // to incremental pulls: we only get shipments new since our last sync,
+    // never re-pulling the whole history each time.
     const url =
-      `${BASE}/shipments?shipDateStart=${encodeURIComponent(shipDateStart)}` +
-      `&includeShipmentItems=true&pageSize=500&page=${page}`;
+      `${BASE}/shipments?createDateStart=${encodeURIComponent(createDateStart)}` +
+      `&includeShipmentItems=true&pageSize=500&page=${page}&sortBy=CreateDate&sortDir=ASC`;
     const data = await ssFetch(url);
     pages = data.pages || 1;
 
@@ -181,18 +231,48 @@ async function syncOnce() {
     page++;
   } while (page <= pages);
 
+  // Advance the watermark to when THIS run started, so the next run picks up
+  // from here. (We use run start, not run end, so shipments recorded during a
+  // long sync aren't skipped — the overlap covers the rest.)
+  await setWatermark(runStartedAt.toISOString());
+
+  // Keep the human-facing "last_sync" for the dashboard header.
   await pool.query(
     `INSERT INTO meta(key, value) VALUES('last_sync', $1)
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     [new Date().toISOString()]
   );
 
+  // Remove orders older than the retention window (keeps the DB tidy and the
+  // dashboard count real). Scan history is NOT touched here — see cleanup.js.
+  const removed = await cleanupOldOrders();
+
   const secs = ((Date.now() - start) / 1000).toFixed(1);
-  console.log(`Sync done. ${count} shipments upserted in ${secs}s.`);
-  return { synced: count };
+  console.log(`Sync done. ${count} new/updated shipments in ${secs}s. Cleaned ${removed} old orders.`);
+  return { synced: count, cleaned: removed };
 }
 
-module.exports = { syncOnce };
+// Delete orders whose ship_date is older than RETENTION_DAYS. Scan records are
+// preserved (audit trail is permanent). An order re-scanned within the window
+// still has its data, so the mismatch check keeps working.
+const RETENTION_DAYS = parseInt(process.env.RETENTION_DAYS || '10', 10);
+
+async function cleanupOldOrders() {
+  const cutoff = daysAgo(RETENTION_DAYS);
+  const cutoffStr = cutoff.toISOString().slice(0, 10); // YYYY-MM-DD
+  // ship_date from ShipStation is like "2026-07-31T..." or "2026-07-31"; compare
+  // on the date prefix. Orders with no ship_date are left alone.
+  const r = await pool.query(
+    `DELETE FROM orders
+     WHERE ship_date IS NOT NULL
+       AND ship_date <> ''
+       AND substr(ship_date, 1, 10) < $1`,
+    [cutoffStr]
+  );
+  return r.rowCount || 0;
+}
+
+module.exports = { syncOnce, cleanupOldOrders };
 
 if (require.main === module) {
   const { init } = require('./db');
